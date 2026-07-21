@@ -17,11 +17,11 @@ class TriageStatus(StrEnum):
     @classmethod
     def labels(cls) -> dict[str, str]:
         return {
-            cls.NEW: "Nowy",
-            cls.INVESTIGATING: "W analizie",
-            cls.ESCALATED: "Eskalowany",
-            cls.RESOLVED: "Rozwiązany",
-            cls.FALSE_POSITIVE: "Fałszywy alarm",
+            cls.NEW: "New",
+            cls.INVESTIGATING: "Investigating",
+            cls.ESCALATED: "Escalated",
+            cls.RESOLVED: "Resolved",
+            cls.FALSE_POSITIVE: "False Positive",
         }
 
     @property
@@ -39,11 +39,11 @@ class SeverityBand(StrEnum):
     @classmethod
     def labels(cls) -> dict[str, str]:
         return {
-            cls.ALL: "Wszystkie",
-            cls.LOW: "Niski (0-6)",
-            cls.MEDIUM: "Średni (7-11)",
-            cls.HIGH: "Wysoki (12-14)",
-            cls.CRITICAL: "Krytyczny (15+)",
+            cls.ALL: "All",
+            cls.LOW: "Low (0-6)",
+            cls.MEDIUM: "Medium (7-11)",
+            cls.HIGH: "High (12-14)",
+            cls.CRITICAL: "Critical (15+)",
         }
 
     @property

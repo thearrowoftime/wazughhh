@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Wazuh Alert Viewer — punkt wejścia CLI."""
+"""Wazuh Alert Viewer — CLI entry point."""
 
 from __future__ import annotations
 
@@ -20,19 +20,19 @@ def default_triage_path() -> Path:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Wazuh Alert Viewer — TUI do filtrowania, triage alertów i Decoder Lab",
+        description="Wazuh Alert Viewer — TUI for alert triage, filtering and Decoder Lab",
     )
     parser.add_argument(
         "-a", "--alerts",
         type=Path,
         default=default_alerts_path(),
-        help="Plik alertów (.json, .jsonl lub eksport OpenSearch)",
+        help="Alerts file (.json, .jsonl or OpenSearch export)",
     )
     parser.add_argument(
         "-t", "--triage",
         type=Path,
         default=default_triage_path(),
-        help="Plik JSON z statusami triage i notatkami",
+        help="JSON file to persist triage statuses and analyst notes",
     )
     # SSH / wazuh-logtest
     parser.add_argument(
@@ -72,7 +72,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
     if not args.alerts.exists():
-        raise SystemExit(f"Nie znaleziono pliku alertów: {args.alerts}")
+        raise SystemExit(f"Alerts file not found: {args.alerts}")
 
     ssh_cfg = WazuhSSHConfig(
         host=args.wazuh_host,

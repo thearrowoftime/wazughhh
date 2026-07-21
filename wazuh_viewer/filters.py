@@ -71,7 +71,7 @@ def severity_options() -> list[tuple[str, str]]:
 
 
 def triage_filter_options() -> list[tuple[str, str]]:
-    options = [("all", "Wszystkie statusy")]
+    options = [("all", "All statuses")]
     for status in TriageStatus:
         options.append((status.value, status.label))
     return options
