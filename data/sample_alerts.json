@@ -1,0 +1,142 @@
+[
+  {
+    "timestamp": "2026-07-10T06:12:33.000Z",
+    "rule": {
+      "id": "5710",
+      "level": 10,
+      "description": "sshd: authentication failed.",
+      "mitre": {
+        "id": ["T1110"],
+        "tactic": ["Credential Access"],
+        "technique": ["Brute Force"]
+      }
+    },
+    "agent": {"id": "001", "name": "web-prod-01"}
+  },
+  {
+    "timestamp": "2026-07-10T06:15:01.000Z",
+    "rule": {
+      "id": "5712",
+      "level": 12,
+      "description": "sshd: brute force trying to get access.",
+      "mitre": {
+        "id": ["T1110", "T1078"],
+        "tactic": ["Credential Access", "Defense Evasion"],
+        "technique": ["Brute Force", "Valid Accounts"]
+      }
+    },
+    "agent": {"id": "001", "name": "web-prod-01"}
+  },
+  {
+    "timestamp": "2026-07-10T06:18:44.000Z",
+    "rule": {
+      "id": "92213",
+      "level": 15,
+      "description": "Suspicious PowerShell command execution detected.",
+      "mitre": {
+        "id": ["T1059.001"],
+        "tactic": ["Execution"],
+        "technique": ["PowerShell"]
+      }
+    },
+    "agent": {"id": "003", "name": "dc-win-01"}
+  },
+  {
+    "timestamp": "2026-07-10T06:22:10.000Z",
+    "rule": {
+      "id": "80790",
+      "level": 8,
+      "description": "New Windows service created.",
+      "mitre": {
+        "id": ["T1543.003"],
+        "tactic": ["Persistence"],
+        "technique": ["Windows Service"]
+      }
+    },
+    "agent": {"id": "003", "name": "dc-win-01"}
+  },
+  {
+    "timestamp": "2026-07-10T06:25:55.000Z",
+    "rule": {
+      "id": "31151",
+      "level": 7,
+      "description": "Auditd: command executed by root.",
+      "mitre": {
+        "id": ["T1059"],
+        "tactic": ["Execution"],
+        "technique": ["Command and Scripting Interpreter"]
+      }
+    },
+    "agent": {"id": "002", "name": "db-linux-02"}
+  },
+  {
+    "timestamp": "2026-07-10T06:30:12.000Z",
+    "rule": {
+      "id": "23504",
+      "level": 14,
+      "description": "Possible kernel-level rootkit detected.",
+      "mitre": {
+        "id": ["T1014"],
+        "tactic": ["Defense Evasion"],
+        "technique": ["Rootkit"]
+      }
+    },
+    "agent": {"id": "002", "name": "db-linux-02"}
+  },
+  {
+    "timestamp": "2026-07-10T06:35:40.000Z",
+    "rule": {
+      "id": "5503",
+      "level": 5,
+      "description": "User login failed.",
+      "mitre": {
+        "id": ["T1078"],
+        "tactic": ["Defense Evasion"],
+        "technique": ["Valid Accounts"]
+      }
+    },
+    "agent": {"id": "004", "name": "vpn-gw-01"}
+  },
+  {
+    "timestamp": "2026-07-10T06:40:18.000Z",
+    "rule": {
+      "id": "87802",
+      "level": 13,
+      "description": "Lateral movement via SMB detected.",
+      "mitre": {
+        "id": ["T1021.002"],
+        "tactic": ["Lateral Movement"],
+        "technique": ["SMB/Windows Admin Shares"]
+      }
+    },
+    "agent": {"id": "005", "name": "file-srv-03"}
+  },
+  {
+    "timestamp": "2026-07-10T06:45:02.000Z",
+    "rule": {
+      "id": "100100",
+      "level": 11,
+      "description": "Outbound connection to known C2 IP.",
+      "mitre": {
+        "id": ["T1071"],
+        "tactic": ["Command and Control"],
+        "technique": ["Application Layer Protocol"]
+      }
+    },
+    "agent": {"id": "006", "name": "workstation-hr-07"}
+  },
+  {
+    "timestamp": "2026-07-10T06:50:33.000Z",
+    "rule": {
+      "id": "60106",
+      "level": 6,
+      "description": "Integrity checksum changed.",
+      "mitre": {
+        "id": ["T1565"],
+        "tactic": ["Impact"],
+        "technique": ["Data Manipulation"]
+      }
+    },
+    "agent": {"id": "002", "name": "db-linux-02"}
+  }
+]

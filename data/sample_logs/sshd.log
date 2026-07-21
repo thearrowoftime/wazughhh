@@ -1,0 +1,13 @@
+Jul 21 10:00:01 web-prod-01 sshd[1234]: Failed password for root from 10.0.0.5 port 52114 ssh2
+Jul 21 10:00:03 web-prod-01 sshd[1235]: Failed password for root from 10.0.0.5 port 52115 ssh2
+Jul 21 10:00:07 web-prod-01 sshd[1236]: Failed password for admin from 10.0.0.5 port 52116 ssh2
+Jul 21 10:00:11 web-prod-01 sshd[1237]: Failed password for deploy from 10.0.0.5 port 52117 ssh2
+Jul 21 10:01:00 web-prod-01 sshd[1238]: Accepted publickey for deploy from 10.1.0.20 port 44012 ssh2
+Jul 21 10:02:00 web-prod-01 sshd[1239]: Accepted password for backup from 192.168.1.100 port 55200 ssh2
+Jul 21 10:05:00 web-prod-01 sshd[1240]: Invalid user oracle from 203.0.113.10 port 39001
+Jul 21 10:05:01 web-prod-01 sshd[1241]: Invalid user postgres from 203.0.113.10 port 39002
+Jul 21 10:05:02 web-prod-01 sshd[1242]: Invalid user mysql from 203.0.113.10 port 39003
+Jul 21 10:10:00 web-prod-01 sshd[1243]: Disconnecting invalid user admin 203.0.113.10 port 39010: Too many authentication failures [preauth]
+Jul 21 10:10:30 web-prod-01 sshd[1244]: Connection closed by 203.0.113.10 port 39011 [preauth]
+Jul 21 10:11:00 web-prod-01 sshd[1245]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=203.0.113.10 user=root
+Jul 21 10:12:00 web-prod-01 sshd[1246]: Accepted publickey for root from 10.0.1.5 port 22222 ssh2: RSA SHA256:abcd1234efgh5678

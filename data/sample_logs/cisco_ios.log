@@ -1,0 +1,8 @@
+Jul 21 09:00:01 router-core-01 3026: Jul 21 09:00:01.123: %SEC_LOGIN-5-LOGIN_SUCCESS: Login Success [user: admin] [Source: 10.0.0.5] [localport: 22] at 09:00:01 UTC Mon Jul 21 2026
+Jul 21 09:01:00 router-core-01 3027: Jul 21 09:01:00.456: %SEC_LOGIN-4-LOGIN_FAILED: Login failed [user: cisco] [Source: 203.0.113.50] [localport: 22] at 09:01:00 UTC Mon Jul 21 2026
+Jul 21 09:02:00 router-core-01 3028: Jul 21 09:02:00.789: %SEC_LOGIN-4-LOGIN_FAILED: Login failed [user: admin] [Source: 203.0.113.50] [localport: 22] at 09:02:00 UTC Mon Jul 21 2026
+Jul 21 09:05:00 router-core-01 3029: Jul 21 09:05:00.001: %LINK-3-UPDOWN: Interface GigabitEthernet0/0, changed state to down
+Jul 21 09:05:05 router-core-01 3030: Jul 21 09:05:05.002: %LINK-3-UPDOWN: Interface GigabitEthernet0/0, changed state to up
+Jul 21 09:10:00 router-core-01 3031: Jul 21 09:10:00.100: %BGP-5-ADJCHANGE: neighbor 10.0.1.1 Up
+Jul 21 09:15:00 router-core-01 3032: Jul 21 09:15:00.200: %ACL-6-IPACCESSLOGP: list BLOCK-IN denied tcp 203.0.113.99(45678) -> 192.168.1.1(22), 1 packet
+Jul 21 09:16:00 router-core-01 3033: Jul 21 09:16:00.300: %ACL-6-IPACCESSLOGP: list BLOCK-IN denied tcp 203.0.113.99(45679) -> 192.168.1.1(23), 1 packet

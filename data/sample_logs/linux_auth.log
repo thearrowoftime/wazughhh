@@ -1,0 +1,11 @@
+Jul 21 06:00:01 db-linux-02 sudo: root : TTY=pts/0 ; PWD=/root ; USER=root ; COMMAND=/bin/cat /etc/shadow
+Jul 21 06:01:00 db-linux-02 sudo: deploy : TTY=pts/1 ; PWD=/opt/app ; USER=root ; COMMAND=/usr/bin/systemctl restart app
+Jul 21 06:02:00 db-linux-02 sudo: hacker : TTY=pts/2 ; PWD=/tmp ; USER=root ; COMMAND=/bin/bash
+Jul 21 06:03:00 db-linux-02 useradd[4567]: new user: name=svc_deploy, UID=1005, GID=1005, home=/home/svc_deploy, shell=/bin/bash
+Jul 21 06:04:00 db-linux-02 userdel[4568]: delete user 'temp_user'
+Jul 21 06:05:00 db-linux-02 passwd[4569]: pam_unix(passwd:chauthtok): password changed for root
+Jul 21 06:06:00 db-linux-02 su[4570]: Successful su for root by backup
+Jul 21 06:07:00 db-linux-02 su[4571]: Failed su for root by www-data
+Jul 21 06:08:00 db-linux-02 cron[4572]: (root) CMD (/usr/sbin/logrotate /etc/logrotate.conf)
+Jul 21 06:09:00 db-linux-02 sshd[4573]: Accepted publickey for deploy from 10.1.0.10 port 32100 ssh2
+Jul 21 06:10:00 db-linux-02 kernel: [1234567.890] audit: type=1400 audit(1753084200.123:100): apparmor="DENIED" operation="open" profile="/usr/sbin/sshd" name="/etc/passwd" pid=1234 comm="sshd"
