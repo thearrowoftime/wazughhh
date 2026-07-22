@@ -1,31 +1,35 @@
 # wazughhh — Wazuh Alert Viewer + Decoder Lab
 
 A terminal TUI (built with [Textual](https://github.com/Textualize/textual)) for SOC analysts and Wazuh engineers.
-Two tools in one:
+Two tools in one tab-switched interface:
 
-- **Alert Triage** — filter, inspect and annotate Wazuh alerts from exported JSON/JSONL files
-- **Decoder Lab** — import raw rsyslog/syslog files, auto-cluster similar log lines with [Drain3](https://github.com/logpai/Drain3), generate Wazuh XML decoders and liblognorm rulebases, measure local coverage, and validate against a live Wazuh Manager over SSH
+- **Alert Triage** — filter, deduplicate, inspect and annotate Wazuh alerts; export shift handover reports (Markdown + CSV)
+- **Decoder Lab** — import raw rsyslog/syslog files, auto-cluster similar log lines with [Drain3](https://github.com/logpai/Drain3), generate Wazuh XML decoders and liblognorm rulebases, validate against a live Wazuh Manager over SSH, and **batch-deploy all decoders with one click**
 
 ---
 
 ## Screenshot
 
 ```
-┌─ Wazuh Alert Viewer ─────────────────────────────────────────────────┐
-│ [1] Alerts  [2] Decoder Lab                                          │
-├──────────────┬───────────────────────────────┬───────────────────────┤
-│ Filters      │ Time         Lvl  Host  Rule  │ Alert a1b2c3d4        │
-│ Severity ▼   │ 2026-07-10   15   dc-01 92213 │ Severity 15 CRITICAL  │
-│ Host     ▼   │ 2026-07-10   14   db-02 23504 │ Host: dc-win-01       │
-│ MITRE    ▼   │ 2026-07-10   13   fs-03 87802 │ Rule: 92213           │
-│ Status   ▼   │ ...                           │ MITRE: T1059.001      │
-│ Search [   ] │                               │ Triage status ▼       │
-│ Results: 7/10│                               │ Analyst [          ]  │
-│              │                               │ Notes                 │
-│              │                               │ [                   ] │
-└──────────────┴───────────────────────────────┴───────────────────────┘
-│ q Quit  1 Alerts  2 Decoder Lab  r Reload  s Save  / Search          │
-└──────────────────────────────────────────────────────────────────────┘
+┌─ Wazuh Alert Viewer ──────────────────────────────────────────────────────────────┐
+│ [1] Alerts  [2] Decoder Lab                                                        │
+├────────────────┬──────────────────────────────────────────┬────────────────────────┤
+│ Filters        │ Count  First seen   Last seen  Lvl  Host │ Group: 5710 @ web-01   │
+│ Severity ▼     │   47   2026-07-10   2026-07-10  5  web-01│ HIGH (max level 12)    │
+│ Host     ▼     │    3   2026-07-10   2026-07-10 12  db-02 │ Count: 47 events       │
+│ MITRE    ▼     │    1   2026-07-10   2026-07-10 15  dc-01 │ First: 2026-07-10 ...  │
+│ Status   ▼     │  ...                                      │ MITRE: T1110           │
+│ Search [     ] │                                           │                        │
+│ Results: 3 grps│                                           │                        │
+│ ─── Dedup ─── │                                           │                        │
+│ [x] Group rule+│                                           │                        │
+│ Window: 60 min │                                           │                        │
+│ ─── Export ── │                                           │                        │
+│ [Markdown rpt] │                                           │                        │
+│ [CSV export  ] │                                           │                        │
+└────────────────┴──────────────────────────────────────────┴────────────────────────┘
+│ q Quit  1 Alerts  2 Decoder Lab  r Reload  s Save  / Search                        │
+└────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -41,8 +45,11 @@ Two tools in one:
 | Filter by MITRE | IDs, tactics and techniques |
 | Filter by triage status | New, Investigating, Escalated, Resolved, False Positive |
 | Full-text search | Searches description, rule ID, host, MITRE tags, analyst notes |
-| Detail panel | Shows all alert fields + pre-decoder output from the raw alert |
+| **Alert deduplication** | Checkbox "Group by rule+host" — collapses identical rule+host pairs within a configurable time window (default 60 min) into one row with an event counter; tracks first/last seen and max severity |
+| Detail panel | Shows all alert fields + pre-decoder output; group detail shows event count and time range |
 | Triage workflow | Set status, assign analyst name, write notes — persisted to JSON |
+| **Markdown report** | Exports full shift handover document: status breakdown, severity table, top 10 rules/hosts, escalated alerts with notes, still-investigating section |
+| **CSV export** | Exports all filtered alerts as CSV (one row per alert, all triage fields included) — ready for Excel / ticket import |
 
 ### Decoder Lab tab (`2`)
 
@@ -56,7 +63,12 @@ Two tools in one:
 | Smart field naming | Infers `srcip`, `dstip`, `srcport`, `user`, `action`, `pid`, `url`, `mac` from context |
 | Local coverage | Tests generated regex against all cluster samples — shows `matched/total (%)` |
 | wazuh-logtest via SSH | Sends samples to `/var/ossec/bin/wazuh-logtest` on Wazuh Manager, parses Phase 1/2/3 output |
-| Export | Saves XML and `.rb` rulebase to `data/generated/` — never deploys automatically |
+| Single export | Save XML or `.rb` rulebase for the selected cluster to `data/generated/` |
+| **Single SSH deploy** | SCP the selected cluster's XML to `/var/ossec/etc/decoders/` on the Wazuh Manager |
+| **Batch export** | Export ALL cluster decoders as XML + liblognorm bundles in one click (merged by program_name) |
+| **rsyslog .conf generator** | Generate a complete `rsyslog.conf` snippet with `mmnormalize` action blocks + Wazuh JSON forward — one block per program, ready to drop into `/etc/rsyslog.d/` |
+| **Deploy ALL + reload** | Batch SCP all XMLs → run `wazuh-logtest --check` → only reload if syntax is clean → `wazuh-control reload` |
+| Syntax validation | Runs `wazuh-logtest --check` on the remote host and shows the output before any reload |
 
 ---
 
@@ -81,7 +93,7 @@ python main.py
 # Custom alerts file
 python main.py -a /path/to/alerts.json
 
-# With SSH access to Wazuh Manager for live logtest
+# With SSH access to Wazuh Manager for live logtest / deploy
 python main.py \
   --wazuh-host 10.0.0.5 \
   --wazuh-user root \
@@ -91,16 +103,37 @@ python main.py \
 python main.py --help
 ```
 
-### Decoder Lab workflow
+---
 
-1. Enter a log file path (e.g. `data/sample_logs/sshd.log`) and click **Load file**
-2. The cluster table shows all discovered patterns sorted by frequency
-3. Click a row — the right panel shows Wazuh XML, liblognorm rulebase, pre-decoder fields and local coverage
-4. Edit the generated XML/rulebase directly in the editor
-5. Enter SSH credentials → **Run logtest (sample)** to validate against a live Wazuh Manager
-6. Click **Export XML** or **Export liblognorm** to save to `data/generated/`
+## Decoder Lab workflow
 
-> **Important:** generated decoders are candidates and must be reviewed before deploying to `/var/ossec/etc/decoders/`.
+### Automate decoders for 80 rsyslog devices
+
+1. Collect raw logs from all devices into one directory (e.g. `data/sample_logs/`)
+2. Click **Load directory** — all files are imported and clustered at once
+3. The cluster table groups by `program_name` (sshd, sudo, kernel, firewall…) — each row = one pattern
+4. Select a cluster — Wazuh XML and liblognorm rulebase appear instantly in the editor
+5. Adjust field names or regex if needed — local coverage updates automatically
+6. Enter SSH credentials (host, user, key) in the sidebar
+7. Click **Export ALL XML + liblognorm** to save everything locally first (review files in `data/generated/`)
+8. Click **Generate rsyslog .conf** to produce `wazuh_forward.conf` — one `mmnormalize` action per program
+9. Click **Deploy ALL + reload Wazuh** — the tool will:
+   - SCP all XML decoders to `/var/ossec/etc/decoders/`
+   - Run `wazuh-logtest --check` on the remote host
+   - Only call `wazuh-control reload` if syntax is clean
+   - Show per-file deploy results in the output panel
+
+> **Note:** all generated decoders are marked as candidates (`<!-- CANDIDATE — review before deploying -->`).  
+> Use the logtest output and local coverage to verify before a production deploy.
+
+### Single cluster workflow
+
+1. Enter a log file path and click **Load file**
+2. Click a cluster row — inspect Wazuh XML, liblognorm rulebase, predecoder fields, local coverage
+3. Edit directly in the TextArea if needed
+4. Click **Run logtest (sample)** to test one representative line against the live Wazuh Manager
+5. Click **Run logtest (full cluster)** to send up to 50 samples and see match rate
+6. Click **Deploy XML via SSH** to push only the selected decoder
 
 ---
 
@@ -118,9 +151,25 @@ python main.py --help
 
 ---
 
+## Shift report format
+
+The Markdown report (`reports/shift_report_YYYYMMDD_HHMMSS.md`) contains:
+
+- Summary header with analyst name, shift date, total alert count
+- Status breakdown table (New / Investigating / Escalated / Resolved / False Positive)
+- Severity breakdown (Critical / High / Medium / Low)
+- Top 10 triggered rules with description
+- Top 10 affected hosts
+- Full escalated alert list with analyst notes
+- Still-investigating list with assigned analyst and notes
+
+The CSV (`reports/alerts_YYYYMMDD_HHMMSS.csv`) contains one row per alert with all triage metadata.
+
+---
+
 ## File formats
 
-The alert loader accepts:
+### Alert input
 
 | Format | Notes |
 |--------|-------|
@@ -129,7 +178,14 @@ The alert loader accepts:
 | OpenSearch export | `{"hits":{"hits":[{"_source":{...}}]}}` |
 | Wazuh API export | `{"data":{"affected_items":[...]}}` |
 
-The Decoder Lab importer additionally reads plain `.log` / `.txt` files (one line = one sample) and JSONL with `full_log`, `message` or `raw_log` fields.
+### Log input (Decoder Lab)
+
+| Format | Notes |
+|--------|-------|
+| Plain `.log` / `.txt` | One line = one sample |
+| JSONL | Fields: `full_log`, `message`, or `raw_log` |
+| JSON list | Array of objects with the above fields |
+| Directory | Recursively loads all `.log`, `.txt`, `.jsonl`, `.json` files |
 
 ---
 
@@ -141,20 +197,24 @@ wazughhh/
 ├── requirements.txt
 ├── data/
 │   ├── sample_alerts.json         # 10 sample Wazuh alerts
-│   ├── sample_logs/               # rsyslog samples (sshd, FortiGate, Cisco IOS, Linux auth, Windows)
-│   └── generated/                 # exported decoders (git-ignored)
+│   ├── sample_logs/               # rsyslog samples (sshd, FortiGate, Cisco IOS, auth, Windows)
+│   ├── generated/                 # exported decoders — review here before deploying (git-ignored)
+│   └── reports/                   # shift reports — Markdown + CSV (git-ignored)
 └── wazuh_viewer/
-    ├── app.py                     # Textual TUI — two-tab layout
-    ├── models.py                  # Alert, TriageStatus, SeverityBand, FilterState
+    ├── app.py                     # Textual TUI — AlertsTab + DecoderLabTab
+    ├── models.py                  # Alert, AlertGroup, TriageStatus, SeverityBand, FilterState
     ├── parser.py                  # Alert JSON/JSONL parser
-    ├── filters.py                 # Alert filtering logic
+    ├── filters.py                 # Alert filtering + group_alerts() deduplication
     ├── storage.py                 # Triage persistence (JSON)
-    ├── decoder_models.py          # LogSample, LogCluster, LogtestResult, CoverageReport
+    ├── reporter.py                # Shift report generator (Markdown + CSV)
+    ├── decoder_models.py          # LogSample, LogCluster, LogtestResult, CoverageReport, WazuhSSHConfig
     ├── predecoder.py              # RFC 3164 / RFC 5424 syslog header parser
     ├── log_importer.py            # Multi-format log file importer
     ├── clusterer.py               # Drain3-based log clustering
     ├── decoder_generator.py       # Wazuh XML + liblognorm generator + local coverage
-    └── logtest_runner.py          # SSH wazuh-logtest runner + output parser
+    ├── logtest_runner.py          # SSH wazuh-logtest runner + output parser
+    ├── ssh_deployer.py            # SCP deploy + wazuh-logtest --check + wazuh-control reload
+    └── rsyslog_generator.py       # rsyslog mmnormalize conf + liblognorm/XML bundle generators
 ```
 
 ---
@@ -165,35 +225,46 @@ wazughhh/
 python -m pytest tests/ -v
 ```
 
-33 tests covering: predecoder, importer, clusterer, XML/liblognorm generator, coverage, logtest output parser.
+**61 tests** covering: predecoder, importer, clusterer, XML/liblognorm generator, local coverage, logtest output parser, alert deduplication/grouping, shift report (Markdown + CSV), rsyslog config and bundle generators.
 
 ---
 
-## What else could be added
+## SSH authentication
 
-See [Ideas](#ideas) below.
+All SSH/SCP operations use the system `ssh`/`scp` binaries with key-based authentication:
+
+```bash
+# Generate a key pair (if you don't have one)
+ssh-keygen -t ed25519 -f ~/.ssh/wazuh_deploy
+
+# Copy the public key to the Wazuh Manager
+ssh-copy-id -i ~/.ssh/wazuh_deploy.pub root@10.0.0.5
+
+# Enter the private key path in the Decoder Lab SSH sidebar
+# or pass it on startup:
+python main.py --identity-file ~/.ssh/wazuh_deploy
+```
+
+No passwords are stored. `BatchMode=yes` ensures the tool never hangs waiting for a prompt.
 
 ---
 
-## Ideas
-
-The tool is deliberately minimal — it doesn't auto-deploy anything. Possible extensions:
+## Ideas / future work
 
 **High value:**
 - **Live Wazuh Indexer / API source** — pull alerts directly instead of loading files; poll every N seconds
-- **Alert deduplication / grouping** — collapse same rule+host within a time window; show event count instead of individual rows
 - **Triage history** — append-only log of status changes per alert (who changed what and when)
 - **Quick-triage hotkeys** — `i` = Investigating, `f` = False Positive, `e` = Escalate, no mouse needed
-- **Shift report export** — Markdown or CSV summary of all triaged alerts in a session
+- **Watch mode** — monitor a live log file and re-cluster when new lines arrive
+- **Wazuh API authentication** — token-based, stored in OS keychain (not plain text)
 
 **Decoder Lab:**
-- **Logtest sandbox tab** — paste any raw log line, send to wazuh-logtest, see all three phases
-- **Jump to decoder/rule file** — given `decoder.name` from logtest, open the matching XML in the editor panel
+- **Logtest sandbox** — paste any raw log line, send to wazuh-logtest, see all three phases inline
+- **Jump to decoder/rule file** — given `decoder.name` from logtest, open the matching XML
 - **Decoder conflict checker** — detect when two decoders share `program_name` + overlapping `prematch`
-- **Regression test runner** — run all samples against a decoder file and show which pass/fail over time
-- **rsyslog config generator** — produce the `mmnormalize` `action()` block alongside the `.rb` rulebase
+- **Regression test runner** — run all samples against a decoder file, track pass/fail over commits
+- **Git-backed decoder versioning** — auto-commit generated files to a local repo so every change is tracked
 
 **Infrastructure:**
-- **Git-backed decoder versioning** — auto-commit generated files so changes are tracked
-- **Wazuh API authentication** — token-based, stored in OS keychain (not plain text)
 - **Multi-agent support** — filter alerts by agent group, OS platform, or custom label
+- **RBAC / read-only mode** — restrict triage write operations for junior analysts
