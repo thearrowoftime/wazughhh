@@ -1,17 +1,16 @@
 from __future__ import annotations
 
 import re
-import json
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import cast
 
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.reactive import reactive
 from textual.widgets import (
     Button,
+    Checkbox,
     DataTable,
     Footer,
     Header,
@@ -19,7 +18,6 @@ from textual.widgets import (
     Label,
     Select,
     Static,
-    Tab,
     TabbedContent,
     TabPane,
     TextArea,
@@ -27,6 +25,7 @@ from textual.widgets import (
 
 from wazuh_viewer.filters import (
     apply_filters,
+    group_alerts,
     severity_options,
     triage_action_options,
     triage_filter_options,
@@ -35,6 +34,7 @@ from wazuh_viewer.filters import (
 )
 from wazuh_viewer.models import (
     Alert,
+    AlertGroup,
     FilterState,
     SeverityBand,
     TriageStatus,
@@ -43,12 +43,8 @@ from wazuh_viewer.models import (
 )
 from wazuh_viewer.parser import load_alerts_from_file
 from wazuh_viewer.storage import TriageStore
-from wazuh_viewer.decoder_models import (
-    LogCluster,
-    LogSample,
-    WazuhSSHConfig,
-    CoverageReport,
-)
+from wazuh_viewer.reporter import generate_markdown_report, generate_csv_report, save_report
+from wazuh_viewer.decoder_models import LogCluster, LogSample, WazuhSSHConfig, CoverageReport
 from wazuh_viewer.log_importer import load_samples, load_samples_from_dir
 from wazuh_viewer.clusterer import cluster_samples
 from wazuh_viewer.decoder_generator import (
@@ -58,6 +54,18 @@ from wazuh_viewer.decoder_generator import (
     _template_to_pcre2_and_order,
 )
 from wazuh_viewer.logtest_runner import run_logtest_ssh
+from wazuh_viewer.ssh_deployer import (
+    check_connection,
+    deploy_decoder_xml,
+    deploy_liblognorm_rb,
+    reload_wazuh_manager,
+    run_logtest_check,
+)
+from wazuh_viewer.rsyslog_generator import (
+    generate_rsyslog_conf,
+    generate_liblognorm_bundle,
+    generate_wazuh_xml_bundle,
+)
 
 
 # ============================================================================
@@ -74,7 +82,7 @@ class FilterPanel(Vertical):
         background: $surface;
     }
     FilterPanel Label { margin-top: 1; }
-    FilterPanel Select, FilterPanel Input {
+    FilterPanel Select, FilterPanel Input, FilterPanel Checkbox {
         width: 100%;
         margin-bottom: 1;
     }
@@ -100,16 +108,30 @@ class DetailPanel(VerticalScroll):
 # ============================================================================
 
 class AlertsTab(TabPane):
-    """Alert triage view — filter, inspect, and annotate Wazuh alerts."""
+    """Alert triage view — filter, deduplicate, inspect and annotate alerts."""
 
-    def __init__(self, alerts_path: Path, triage_store: TriageStore, **kwargs):
+    DEFAULT_CSS = """
+    AlertsTab #al-export-row {
+        height: 3;
+        padding: 0 1;
+    }
+    AlertsTab #al-export-row Button {
+        margin-right: 1;
+    }
+    """
+
+    def __init__(self, alerts_path: Path, triage_store: TriageStore, reports_dir: Path, **kwargs):
         super().__init__("Alerts", id="tab-alerts", **kwargs)
         self._alerts_path = alerts_path
         self._triage_store = triage_store
+        self._reports_dir = reports_dir
         self._all_alerts: list[Alert] = []
         self._filtered_alerts: list[Alert] = []
+        self._groups: list[AlertGroup] = []
         self._filters = FilterState()
         self._selected_id: str | None = None
+        self._grouped_mode: bool = False
+        self._window_minutes: int = 60
 
     def compose(self) -> ComposeResult:
         with Horizontal():
@@ -126,6 +148,14 @@ class AlertsTab(TabPane):
                 yield Label("Search")
                 yield Input(placeholder="description, rule, note…", id="al-search")
                 yield Static("", id="al-summary")
+                yield Label("[b]Deduplication[/b]")
+                yield Checkbox("Group by rule+host", id="al-group-toggle", value=False)
+                yield Label("Time window (min)")
+                yield Input(value="60", id="al-window-min")
+                yield Label("[b]Export[/b]")
+                yield Button("Markdown report", id="al-export-md", variant="success")
+                yield Button("CSV export", id="al-export-csv", variant="success")
+                yield Static("", id="al-export-status")
             with Vertical(id="al-table-panel"):
                 yield DataTable(id="al-table", zebra_stripes=True)
             with Vertical():
@@ -134,11 +164,19 @@ class AlertsTab(TabPane):
     def on_mount(self) -> None:
         table = self.query_one("#al-table", DataTable)
         table.cursor_type = "row"
-        table.add_columns("Time", "Lvl", "Host", "Rule", "MITRE", "Status", "Description")
+        self._set_table_columns(grouped=False)
         self.query_one("#al-detail", DetailPanel).mount(
             Static("[dim]Select an alert from the table[/dim]")
         )
         self.load_data()
+
+    def _set_table_columns(self, grouped: bool) -> None:
+        table = self.query_one("#al-table", DataTable)
+        table.clear(columns=True)
+        if grouped:
+            table.add_columns("Count", "First seen", "Last seen", "Lvl", "Host", "Rule", "MITRE", "Description")
+        else:
+            table.add_columns("Time", "Lvl", "Host", "Rule", "MITRE", "Status", "Description")
 
     def load_data(self) -> None:
         try:
@@ -161,21 +199,42 @@ class AlertsTab(TabPane):
         self._filtered_alerts = apply_filters(self._all_alerts, self._filters, self._triage_store)
         table = self.query_one("#al-table", DataTable)
         table.clear()
-        for alert in self._filtered_alerts:
-            triage = self._triage_store.get(alert.alert_id)
-            table.add_row(
-                alert.timestamp[:19].replace("T", " "),
-                str(alert.rule_level),
-                alert.host,
-                alert.rule_id,
-                alert.mitre_display,
-                triage.status.label,
-                alert.description[:60],
-                key=alert.alert_id,
-            )
+
+        if self._grouped_mode:
+            self._groups = group_alerts(self._filtered_alerts, self._window_minutes)
+            for grp in self._groups:
+                table.add_row(
+                    str(grp.count),
+                    grp.first_seen[:19].replace("T", " "),
+                    grp.last_seen[:19].replace("T", " "),
+                    str(grp.rule_level),
+                    grp.host,
+                    grp.rule_id,
+                    grp.mitre_display,
+                    grp.description[:55],
+                    key=grp.group_key,
+                )
+            label = f"Groups: {len(self._groups)}"
+        else:
+            self._groups = []
+            for alert in self._filtered_alerts:
+                triage = self._triage_store.get(alert.alert_id)
+                table.add_row(
+                    alert.timestamp[:19].replace("T", " "),
+                    str(alert.rule_level),
+                    alert.host,
+                    alert.rule_id,
+                    alert.mitre_display,
+                    triage.status.label,
+                    alert.description[:60],
+                    key=alert.alert_id,
+                )
+            label = ""
+
         active = " [active]" if self._filters.is_active() else ""
         self.query_one("#al-summary", Static).update(
             f"\n[b]Results:[/b] {len(self._filtered_alerts)}/{len(self._all_alerts)}{active}"
+            + (f"\n{label}" if label else "")
         )
         self.app.set_status(
             f"Showing {len(self._filtered_alerts)} of {len(self._all_alerts)} alerts"
@@ -183,14 +242,13 @@ class AlertsTab(TabPane):
 
     def _update_filters(self, **kwargs) -> None:
         f = self._filters
-        new_f = FilterState(
+        self._filters = FilterState(
             severity=kwargs.get("severity", f.severity),
             host=kwargs.get("host", f.host),
             mitre_tag=kwargs.get("mitre_tag", f.mitre_tag),
             triage_status=kwargs.get("triage_status", f.triage_status),
             search=kwargs.get("search", f.search),
         )
-        self._filters = new_f
         self._refresh_table()
 
     @on(Select.Changed, "#al-sev")
@@ -213,10 +271,54 @@ class AlertsTab(TabPane):
     def _search(self, e: Input.Changed) -> None:
         self._update_filters(search=e.value)
 
+    @on(Checkbox.Changed, "#al-group-toggle")
+    def _group_toggle(self, e: Checkbox.Changed) -> None:
+        self._grouped_mode = e.value
+        self._set_table_columns(grouped=self._grouped_mode)
+        self._refresh_table()
+
+    @on(Input.Changed, "#al-window-min")
+    def _window_changed(self, e: Input.Changed) -> None:
+        try:
+            self._window_minutes = max(1, int(e.value))
+            if self._grouped_mode:
+                self._refresh_table()
+        except ValueError:
+            pass
+
     @on(DataTable.RowSelected, "#al-table")
     def _row_selected(self, e: DataTable.RowSelected) -> None:
-        self._selected_id = str(e.row_key.value)
-        self._show_detail(self._selected_id)
+        key = str(e.row_key.value)
+        if self._grouped_mode:
+            grp = next((g for g in self._groups if g.group_key == key), None)
+            if grp:
+                self._show_group_detail(grp)
+        else:
+            self._selected_id = key
+            self._show_detail(key)
+
+    def _show_group_detail(self, grp: AlertGroup) -> None:
+        """Show summary detail for a deduplicated group."""
+        panel = self.query_one("#al-detail", DetailPanel)
+        panel.remove_children()
+        sev = severity_color(grp.rule_level)
+        lines = [
+            Static(f"[b]Group:[/b] {grp.rule_id} @ {grp.host}"),
+            Static(f"[{sev}]{grp.severity_label} (max level {grp.rule_level})[/{sev}]"),
+            Static(f"[b]Count:[/b] {grp.count} events"),
+            Static(f"[b]First seen:[/b] {grp.first_seen[:19].replace('T', ' ')}"),
+            Static(f"[b]Last seen:[/b]  {grp.last_seen[:19].replace('T', ' ')}"),
+            Static(f"[b]MITRE:[/b] {grp.mitre_display}"),
+            Static(f"[b]Description:[/b] {grp.description}"),
+            Static(f"[dim]Click individual alert to set triage — switch off grouping[/dim]"),
+        ]
+        if grp.count <= 5:
+            lines.append(Static("\n[b]Individual events:[/b]"))
+            for a in grp.alerts:
+                lines.append(Static(f"  {a.timestamp[:19].replace('T',' ')} — {a.description[:60]}"))
+        panel.mount(*lines)
+        # Select the most recent alert so triage still works
+        self._selected_id = grp.representative_id
 
     def _show_detail(self, alert_id: str) -> None:
         alert = next(
@@ -286,21 +388,56 @@ class AlertsTab(TabPane):
         panel.remove_children()
         panel.mount(Static("[dim]Select an alert from the table[/dim]"))
 
+    # ------------------------------------------------------------------
+    # Export handlers
+    # ------------------------------------------------------------------
+
+    @on(Button.Pressed, "#al-export-md")
+    def _export_md(self) -> None:
+        try:
+            analyst = ""
+            if self._selected_id:
+                t = self._triage_store.get(self._selected_id)
+                analyst = t.analyst
+            md = generate_markdown_report(
+                self._filtered_alerts,
+                self._triage_store,
+                analyst_name=analyst,
+                shift_label=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+            )
+            ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+            out = self._reports_dir / f"shift_report_{ts}.md"
+            save_report(md, out)
+            self.query_one("#al-export-status", Static).update(f"[green]Saved → {out.name}[/green]")
+            self.app.set_status(f"Markdown report saved → {out}")
+        except Exception as exc:
+            self.query_one("#al-export-status", Static).update(f"[red]{exc}[/red]")
+
+    @on(Button.Pressed, "#al-export-csv")
+    def _export_csv(self) -> None:
+        try:
+            csv_data = generate_csv_report(self._filtered_alerts, self._triage_store)
+            ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+            out = self._reports_dir / f"alerts_{ts}.csv"
+            save_report(csv_data, out)
+            self.query_one("#al-export-status", Static).update(f"[green]Saved → {out.name}[/green]")
+            self.app.set_status(f"CSV saved → {out}")
+        except Exception as exc:
+            self.query_one("#al-export-status", Static).update(f"[red]{exc}[/red]")
+
 
 # ============================================================================
-# Decoder Lab Tab
+# Decoder Lab Tab  (enhanced: batch export, auto-deploy, rsyslog conf)
 # ============================================================================
 
 class DecoderLabTab(TabPane):
-    """Decoder Lab: import → cluster → generate → test → export."""
+    """Decoder Lab: import → cluster → generate → test → deploy."""
 
     DEFAULT_CSS = """
-    DecoderLabTab {
-        height: 1fr;
-    }
+    DecoderLabTab { height: 1fr; }
     #lab-sidebar {
-        width: 40;
-        min-width: 34;
+        width: 42;
+        min-width: 36;
         border: solid $accent;
         padding: 1;
         background: $surface;
@@ -310,24 +447,22 @@ class DecoderLabTab(TabPane):
         width: 100%;
         margin-bottom: 1;
     }
-    #lab-center {
-        width: 1fr;
-        border: solid $primary;
-        padding: 1;
-    }
+    #lab-center { width: 1fr; border: solid $primary; padding: 1; }
     #lab-right {
-        width: 52;
-        min-width: 44;
+        width: 54;
+        min-width: 46;
         border: solid $accent-darken-2;
         padding: 1;
         background: $surface-darken-1;
     }
-    #lab-cluster-table { height: 14; }
+    #lab-cluster-table { height: 12; }
     #lab-coverage { margin-top: 1; }
-    #lab-gen-xml { height: 14; }
-    #lab-gen-rb  { height: 9; }
-    #lab-logtest-out { height: 12; }
-    #lab-sample-detail { height: 10; }
+    #lab-gen-xml { height: 12; }
+    #lab-gen-rb  { height: 8; }
+    #lab-rsyslog-conf { height: 8; }
+    #lab-logtest-out { height: 10; }
+    #lab-sample-detail { height: 8; }
+    #lab-deploy-status { margin-top: 1; }
     """
 
     def __init__(self, ssh_cfg: WazuhSSHConfig, generated_dir: Path, **kwargs):
@@ -347,16 +482,26 @@ class DecoderLabTab(TabPane):
                 yield Button("Load directory", id="lab-load-dir", variant="default")
                 yield Static("", id="lab-import-status")
 
-                yield Label("[b]SSH (wazuh-logtest)[/b]")
+                yield Label("[b]SSH — Wazuh Manager[/b]")
                 yield Input(placeholder="host IP / DNS", id="lab-ssh-host")
                 yield Input(placeholder="user (default: root)", id="lab-ssh-user")
                 yield Input(placeholder="port (default: 22)", id="lab-ssh-port")
                 yield Input(placeholder="identity file ~/.ssh/id_rsa", id="lab-ssh-key")
-                yield Button("Test SSH", id="lab-ssh-test", variant="default")
+                yield Button("Test connection", id="lab-ssh-test", variant="default")
                 yield Static("", id="lab-ssh-status")
 
+                yield Label("[b]Single cluster export[/b]")
                 yield Button("Export XML", id="lab-export-xml", variant="success")
                 yield Button("Export liblognorm", id="lab-export-rb", variant="success")
+                yield Button("Deploy XML via SSH", id="lab-deploy-xml", variant="warning")
+
+                yield Label("[b]Batch — all clusters[/b]")
+                yield Button("Export ALL XML + liblognorm", id="lab-batch-export", variant="success")
+                yield Button("Generate rsyslog .conf", id="lab-gen-rsyslog", variant="success")
+                yield Input(placeholder="Wazuh host for rsyslog fwd (IP)", id="lab-rsyslog-host")
+                yield Input(placeholder="Port (default 1514)", id="lab-rsyslog-port")
+                yield Button("Deploy ALL + reload Wazuh", id="lab-deploy-all", variant="error")
+                yield Static("", id="lab-deploy-status")
 
             with VerticalScroll(id="lab-center"):
                 yield Static("[b]Log clusters[/b] — select a row to inspect")
@@ -369,6 +514,9 @@ class DecoderLabTab(TabPane):
                 yield Label("liblognorm rulebase")
                 yield TextArea("", id="lab-gen-rb")
 
+                yield Label("rsyslog mmnormalize config [dim](batch, all clusters)[/dim]")
+                yield TextArea("", id="lab-rsyslog-conf")
+
                 yield Label("Representative sample")
                 yield TextArea("", id="lab-sample-detail", read_only=True)
 
@@ -378,6 +526,7 @@ class DecoderLabTab(TabPane):
                 yield Static("[b]wazuh-logtest result (SSH)[/b]")
                 yield Button("Run logtest (sample)", id="lab-run-logtest", variant="warning")
                 yield Button("Run logtest (full cluster)", id="lab-run-logtest-all", variant="default")
+                yield Button("Check deployed decoders", id="lab-logtest-check", variant="default")
                 yield TextArea("", id="lab-logtest-out", read_only=True)
                 yield Static("", id="lab-logtest-summary")
 
@@ -387,7 +536,7 @@ class DecoderLabTab(TabPane):
         table.add_columns("ID", "Program", "Samples", "Coverage", "Template")
 
     # ------------------------------------------------------------------
-    # Import handlers
+    # Import
     # ------------------------------------------------------------------
 
     @on(Button.Pressed, "#lab-load-file")
@@ -417,29 +566,19 @@ class DecoderLabTab(TabPane):
     @work(thread=True)
     def _do_import(self, path: Path, is_dir: bool) -> None:
         try:
-            self.app.call_from_thread(
-                self._set_import_status, f"[yellow]Loading {path.name}…[/yellow]"
-            )
-            if is_dir:
-                samples = load_samples_from_dir(path)
-            else:
-                samples = load_samples(path)
-
+            self.app.call_from_thread(self._set_import_status, f"[yellow]Loading {path.name}…[/yellow]")
+            samples = load_samples_from_dir(path) if is_dir else load_samples(path)
             clusters = cluster_samples(samples)
             self.app.call_from_thread(self._apply_import_result, samples, clusters)
         except Exception as exc:
-            self.app.call_from_thread(
-                self._set_import_status, f"[red]Import error: {exc}[/red]"
-            )
+            self.app.call_from_thread(self._set_import_status, f"[red]Import error: {exc}[/red]")
 
     def _apply_import_result(self, samples: list[LogSample], clusters: list[LogCluster]) -> None:
         self._samples = samples
         self._clusters = clusters
         self._selected_cluster = None
         self._populate_cluster_table()
-        self._set_import_status(
-            f"[green]{len(samples)} samples → {len(clusters)} clusters[/green]"
-        )
+        self._set_import_status(f"[green]{len(samples)} samples → {len(clusters)} clusters[/green]")
         self.app.set_status(f"Decoder Lab: {len(samples)} samples, {len(clusters)} clusters")
 
     def _populate_cluster_table(self) -> None:
@@ -453,7 +592,7 @@ class DecoderLabTab(TabPane):
                 c.program_name[:20],
                 str(c.sample_count),
                 cov.label,
-                c.template[:60],
+                c.template[:55],
                 key=str(c.cluster_id),
             )
 
@@ -473,7 +612,6 @@ class DecoderLabTab(TabPane):
     def _show_cluster_detail(self, cluster: LogCluster) -> None:
         xml_text = generate_wazuh_xml(cluster)
         rb_text = generate_liblognorm(cluster)
-
         cluster.generated_xml = xml_text
         cluster.generated_liblognorm = rb_text
 
@@ -489,7 +627,7 @@ class DecoderLabTab(TabPane):
 
         rep = cluster.representative()
         if rep:
-            sample_text = (
+            self.query_one("#lab-sample-detail", TextArea).load_text(
                 f"raw:      {rep.raw}\n"
                 f"format:   {rep.syslog_format}\n"
                 f"ts:       {rep.timestamp}\n"
@@ -498,7 +636,6 @@ class DecoderLabTab(TabPane):
                 f"pid:      {rep.pid}\n"
                 f"message:  {rep.message}"
             )
-            self.query_one("#lab-sample-detail", TextArea).load_text(sample_text)
             predecoder_markup = (
                 f"[b]Format:[/b] {rep.syslog_format}\n"
                 f"[b]Timestamp:[/b] {rep.timestamp}\n"
@@ -529,19 +666,17 @@ class DecoderLabTab(TabPane):
             self.query_one("#lab-ssh-status", Static).update("[red]Enter a host address[/red]")
             return
         self.query_one("#lab-ssh-status", Static).update("[yellow]Connecting…[/yellow]")
-        self._run_ssh_test(cfg)
+        self._run_ssh_test_worker(cfg)
 
     @work(thread=True)
-    def _run_ssh_test(self, cfg: WazuhSSHConfig) -> None:
-        results = run_logtest_ssh(["Jul 21 10:00:01 host sshd[1]: test message"], cfg, timeout=10)
-        r = results[0]
-        if r.error and "not found" not in r.error.lower():
-            msg = f"[red]SSH error: {r.error}[/red]"
-        else:
-            msg = "[green]SSH OK — wazuh-logtest is reachable[/green]"
-        self.app.call_from_thread(
-            self.query_one("#lab-ssh-status", Static).update, msg
-        )
+    def _run_ssh_test_worker(self, cfg: WazuhSSHConfig) -> None:
+        r = check_connection(cfg, timeout=10)
+        msg = f"[green]{r.message}[/green]" if r.success else f"[red]{r.message}[/red]"
+        self.app.call_from_thread(self.query_one("#lab-ssh-status", Static).update, msg)
+
+    # ------------------------------------------------------------------
+    # wazuh-logtest runners
+    # ------------------------------------------------------------------
 
     @on(Button.Pressed, "#lab-run-logtest")
     def _run_logtest_single(self) -> None:
@@ -583,8 +718,8 @@ class DecoderLabTab(TabPane):
         if not results:
             self.query_one("#lab-logtest-out", TextArea).load_text("No results")
             return
-        parts: list[str] = []
         matched = sum(1 for r in results if r.decoder_name)
+        parts = []
         for r in results[:10]:
             block = f"Log: {r.log[:80]}\n"
             if r.error:
@@ -593,27 +728,33 @@ class DecoderLabTab(TabPane):
                 block += f"  Decoder: {r.decoder_name or '—'}  Rule: {r.rule_id or '—'} lvl={r.rule_level or '—'}\n"
                 block += f"  {r.rule_description or ''}\n"
             parts.append(block)
-
-        out_text = "\n".join(parts)
+        out = "\n".join(parts)
         if len(results) > 10:
-            out_text += f"\n… (truncated, showing 10/{len(results)})"
-
-        self.query_one("#lab-logtest-out", TextArea).load_text(out_text)
-        total = len(results)
+            out += f"\n… (truncated, showing 10/{len(results)})"
+        self.query_one("#lab-logtest-out", TextArea).load_text(out)
         self.query_one("#lab-logtest-summary", Static).update(
-            f"[b]logtest coverage:[/b] {matched}/{total} with decoder matched"
+            f"[b]logtest coverage:[/b] {matched}/{len(results)} with decoder matched"
         )
 
-    def _read_ssh_cfg(self) -> WazuhSSHConfig:
-        host = self.query_one("#lab-ssh-host", Input).value.strip()
-        user = self.query_one("#lab-ssh-user", Input).value.strip() or "root"
-        port_str = self.query_one("#lab-ssh-port", Input).value.strip()
-        port = int(port_str) if port_str.isdigit() else 22
-        key = self.query_one("#lab-ssh-key", Input).value.strip()
-        return WazuhSSHConfig(host=host, user=user, port=port, identity_file=key)
+    @on(Button.Pressed, "#lab-logtest-check")
+    def _logtest_check(self) -> None:
+        cfg = self._read_ssh_cfg()
+        if not cfg.is_configured():
+            self.app.set_status("Enter SSH credentials in the sidebar")
+            return
+        self.query_one("#lab-logtest-out", TextArea).load_text("[yellow]Checking deployed decoders…[/yellow]")
+        self._run_logtest_check_worker(cfg)
+
+    @work(thread=True)
+    def _run_logtest_check_worker(self, cfg: WazuhSSHConfig) -> None:
+        r = run_logtest_check(cfg)
+        msg = f"[green]{r.message}[/green]" if r.success else f"[red]{r.message}[/red]"
+        out = r.stdout or r.stderr or "(no output)"
+        self.app.call_from_thread(self.query_one("#lab-logtest-out", TextArea).load_text, out)
+        self.app.call_from_thread(self.query_one("#lab-logtest-summary", Static).update, msg)
 
     # ------------------------------------------------------------------
-    # Export handlers
+    # Single cluster export / deploy
     # ------------------------------------------------------------------
 
     @on(Button.Pressed, "#lab-export-xml")
@@ -640,12 +781,141 @@ class DecoderLabTab(TabPane):
         out.write_text(rb_text, encoding="utf-8")
         self.app.set_status(f"Saved rulebase → {out}")
 
+    @on(Button.Pressed, "#lab-deploy-xml")
+    def _deploy_xml(self) -> None:
+        if not self._selected_cluster:
+            self.app.set_status("Select a cluster first")
+            return
+        cfg = self._read_ssh_cfg()
+        if not cfg.is_configured():
+            self.app.set_status("Enter SSH credentials")
+            return
+        xml_text = self.query_one("#lab-gen-xml", TextArea).text
+        prog = self._selected_cluster.program_name or "custom"
+        filename = f"decoder_{prog.replace('/', '_')}.xml"
+        self._set_deploy_status("[yellow]Deploying…[/yellow]")
+        self._deploy_single_worker(xml_text, filename, cfg)
+
+    @work(thread=True)
+    def _deploy_single_worker(self, xml: str, filename: str, cfg: WazuhSSHConfig) -> None:
+        r = deploy_decoder_xml(xml, filename, cfg)
+        msg = f"[green]{r.message}[/green]" if r.success else f"[red]{r.message}[/red]"
+        self.app.call_from_thread(self._set_deploy_status, msg)
+        if r.success:
+            self.app.call_from_thread(self.app.set_status, f"Deployed {filename} — run logtest check to validate")
+
+    # ------------------------------------------------------------------
+    # Batch export / rsyslog conf / deploy all
+    # ------------------------------------------------------------------
+
+    @on(Button.Pressed, "#lab-batch-export")
+    def _batch_export(self) -> None:
+        if not self._clusters:
+            self.app.set_status("No clusters loaded — import logs first")
+            return
+        try:
+            self._generated_dir.mkdir(parents=True, exist_ok=True)
+            xml_bundle = generate_wazuh_xml_bundle(self._clusters)
+            rb_bundle = generate_liblognorm_bundle(self._clusters)
+            for prog, xml in xml_bundle.items():
+                safe = prog.replace("/", "_").replace(" ", "_")
+                (self._generated_dir / f"decoder_{safe}.xml").write_text(xml, encoding="utf-8")
+            for prog, rb in rb_bundle.items():
+                safe = prog.replace("/", "_").replace(" ", "_")
+                (self._generated_dir / f"{safe}.rb").write_text(rb, encoding="utf-8")
+            self._set_deploy_status(
+                f"[green]Exported {len(xml_bundle)} XML + {len(rb_bundle)} .rb → {self._generated_dir}[/green]"
+            )
+            self.app.set_status(f"Batch export: {len(xml_bundle)} decoders saved to {self._generated_dir}")
+        except Exception as exc:
+            self._set_deploy_status(f"[red]Export error: {exc}[/red]")
+
+    @on(Button.Pressed, "#lab-gen-rsyslog")
+    def _gen_rsyslog_conf(self) -> None:
+        if not self._clusters:
+            self.app.set_status("No clusters loaded")
+            return
+        wazuh_host = self.query_one("#lab-rsyslog-host", Input).value.strip() or "127.0.0.1"
+        port_str = self.query_one("#lab-rsyslog-port", Input).value.strip()
+        wazuh_port = int(port_str) if port_str.isdigit() else 1514
+        conf = generate_rsyslog_conf(self._clusters, wazuh_host=wazuh_host, wazuh_port=wazuh_port)
+        self.query_one("#lab-rsyslog-conf", TextArea).load_text(conf)
+        # Save to disk
+        self._generated_dir.mkdir(parents=True, exist_ok=True)
+        out = self._generated_dir / "wazuh_forward.conf"
+        out.write_text(conf, encoding="utf-8")
+        self.app.set_status(f"rsyslog config saved → {out}")
+
+    @on(Button.Pressed, "#lab-deploy-all")
+    def _deploy_all(self) -> None:
+        if not self._clusters:
+            self.app.set_status("No clusters loaded")
+            return
+        cfg = self._read_ssh_cfg()
+        if not cfg.is_configured():
+            self.app.set_status("Enter SSH credentials")
+            return
+        self._set_deploy_status("[yellow]Deploying all decoders…[/yellow]")
+        self._deploy_all_worker(cfg)
+
+    @work(thread=True)
+    def _deploy_all_worker(self, cfg: WazuhSSHConfig) -> None:
+        xml_bundle = generate_wazuh_xml_bundle(self._clusters)
+        results: list[str] = []
+        ok_count = 0
+
+        for prog, xml in xml_bundle.items():
+            safe = prog.replace("/", "_").replace(" ", "_")
+            filename = f"decoder_{safe}.xml"
+            r = deploy_decoder_xml(xml, filename, cfg)
+            if r.success:
+                ok_count += 1
+                results.append(f"✓ {filename}")
+            else:
+                results.append(f"✗ {filename}: {r.message}")
+
+        # Validate syntax on remote
+        check_r = run_logtest_check(cfg)
+        if check_r.success:
+            results.append(f"\n✓ Decoder syntax check: OK")
+            # Only reload if syntax is clean
+            reload_r = reload_wazuh_manager(cfg)
+            if reload_r.success:
+                results.append(f"✓ Wazuh Manager reloaded")
+            else:
+                results.append(f"✗ Reload failed: {reload_r.message}")
+        else:
+            results.append(f"\n✗ Syntax check FAILED — NOT reloading: {check_r.message}")
+
+        summary = f"[green]Deployed {ok_count}/{len(xml_bundle)}[/green]"
+        out_text = "\n".join(results)
+        self.app.call_from_thread(self.query_one("#lab-logtest-out", TextArea).load_text, out_text)
+        self.app.call_from_thread(self._set_deploy_status, summary)
+        self.app.call_from_thread(
+            self.app.set_status, f"Deploy complete: {ok_count}/{len(xml_bundle)} decoders"
+        )
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _read_ssh_cfg(self) -> WazuhSSHConfig:
+        host = self.query_one("#lab-ssh-host", Input).value.strip()
+        user = self.query_one("#lab-ssh-user", Input).value.strip() or "root"
+        port_str = self.query_one("#lab-ssh-port", Input).value.strip()
+        port = int(port_str) if port_str.isdigit() else 22
+        key = self.query_one("#lab-ssh-key", Input).value.strip()
+        return WazuhSSHConfig(host=host, user=user, port=port, identity_file=key)
+
     def _set_import_status(self, msg: str) -> None:
         self.query_one("#lab-import-status", Static).update(msg)
 
+    def _set_deploy_status(self, msg: str) -> None:
+        self.query_one("#lab-deploy-status", Static).update(msg)
+
 
 # ============================================================================
-# Main App — two tabs
+# Main App
 # ============================================================================
 
 class WazuhAlertViewer(App):
@@ -690,11 +960,12 @@ class WazuhAlertViewer(App):
         self._triage_store = TriageStore(triage_path)
         self._ssh_cfg = ssh_cfg or WazuhSSHConfig()
         self._generated_dir = alerts_path.parent / "generated"
+        self._reports_dir = alerts_path.parent / "reports"
 
     def compose(self) -> ComposeResult:
         yield Header()
         with TabbedContent():
-            yield AlertsTab(self._alerts_path, self._triage_store)
+            yield AlertsTab(self._alerts_path, self._triage_store, self._reports_dir)
             yield DecoderLabTab(self._ssh_cfg, self._generated_dir)
         yield Static("Ready", id="status-bar")
         yield Footer()

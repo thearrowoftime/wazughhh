@@ -17,7 +17,8 @@ class TriageStore:
         if not self.path.exists():
             self._data = {}
             return
-        self._data = json.loads(self.path.read_text(encoding="utf-8"))
+        text = self.path.read_text(encoding="utf-8").strip()
+        self._data = json.loads(text) if text else {}
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)

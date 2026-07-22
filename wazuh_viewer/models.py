@@ -136,6 +136,41 @@ class FilterState:
         )
 
 
+@dataclass
+class AlertGroup:
+    """A deduplicated group of alerts sharing the same rule_id + host."""
+    group_key: str          # "{rule_id}|{host}"
+    rule_id: str
+    host: str
+    rule_level: int
+    description: str
+    mitre_ids: list[str]
+    mitre_tactics: list[str]
+    count: int
+    first_seen: str
+    last_seen: str
+    alerts: list[Alert] = field(default_factory=list)
+
+    @property
+    def severity_label(self) -> str:
+        if self.rule_level >= 15:
+            return "CRITICAL"
+        if self.rule_level >= 12:
+            return "HIGH"
+        if self.rule_level >= 7:
+            return "MEDIUM"
+        return "LOW"
+
+    @property
+    def mitre_display(self) -> str:
+        return ", ".join(self.mitre_ids) if self.mitre_ids else "—"
+
+    @property
+    def representative_id(self) -> str:
+        """Return the alert_id of the most recent alert in the group."""
+        return self.alerts[-1].alert_id if self.alerts else ""
+
+
 def severity_color(level: int) -> str:
     if level >= 15:
         return "red"
