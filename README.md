@@ -1,7 +1,4 @@
-# wazughhh — Wazuh Alert Viewer + Decoder Lab
-
-A terminal TUI (built with [Textual](https://github.com/Textualize/textual)) for SOC analysts and Wazuh engineers.
-Two tools in one tab-switched interface:
+# wazughhh — Wazuh Alert Viewer
 
 - **Alert Triage** — filter, deduplicate, inspect and annotate Wazuh alerts; export shift handover reports (Markdown + CSV)
 - **Decoder Lab** — import raw rsyslog/syslog files, auto-cluster similar log lines with [Drain3](https://github.com/logpai/Drain3), generate Wazuh XML decoders and liblognorm rulebases, validate against a live Wazuh Manager over SSH, and **batch-deploy all decoders with one click**
@@ -249,22 +246,17 @@ No passwords are stored. `BatchMode=yes` ensures the tool never hangs waiting fo
 
 ---
 
-## Ideas / future work
+## Ideas
 
-**High value:**
-- **Live Wazuh Indexer / API source** — pull alerts directly instead of loading files; poll every N seconds
+**Probably next:**
 - **Triage history** — append-only log of status changes per alert (who changed what and when)
 - **Quick-triage hotkeys** — `i` = Investigating, `f` = False Positive, `e` = Escalate, no mouse needed
 - **Watch mode** — monitor a live log file and re-cluster when new lines arrive
 - **Wazuh API authentication** — token-based, stored in OS keychain (not plain text)
-
-**Decoder Lab:**
 - **Logtest sandbox** — paste any raw log line, send to wazuh-logtest, see all three phases inline
 - **Jump to decoder/rule file** — given `decoder.name` from logtest, open the matching XML
 - **Decoder conflict checker** — detect when two decoders share `program_name` + overlapping `prematch`
-- **Regression test runner** — run all samples against a decoder file, track pass/fail over commits
-- **Git-backed decoder versioning** — auto-commit generated files to a local repo so every change is tracked
 
 **Infrastructure:**
-- **Multi-agent support** — filter alerts by agent group, OS platform, or custom label
+- **Multi-agent support** — filter alerts by agent group, OS platform or custom label
 - **RBAC / read-only mode** — restrict triage write operations for junior analysts
