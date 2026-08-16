@@ -51,13 +51,26 @@ class TestWazuhXML:
         xml = generate_wazuh_xml(c)
         assert "sshd" in xml
 
+    def test_generated_xml_roundtrip_local_logtest(self):
+        c = _cluster_from_lines([
+            "Jul 21 10:00:01 h sshd[1]: Failed password for root from 10.0.0.1 port 22",
+            "Jul 21 10:00:02 h sshd[2]: Failed password for admin from 10.0.0.2 port 22",
+        ])
+        xml = generate_wazuh_xml(c)
+        assert 'type="pcre2"' in xml
+        from wazuh_viewer.local_logtest import run_logtest
+        sample = c.representative().raw
+        results = run_logtest([sample], xml_text=xml)
+        assert results[0].matched
+        assert results[0].decoder_name
+
     def test_xml_has_regex_with_groups_for_wildcards(self):
         c = _cluster_from_lines([
             "Jul 21 10:00:01 h sshd[1]: Failed password for root from 10.0.0.1 port 22",
             "Jul 21 10:00:02 h sshd[2]: Failed password for admin from 10.0.0.2 port 22",
         ])
         xml = generate_wazuh_xml(c)
-        if "<regex>" in xml:
+        if "<regex" in xml:
             assert "(" in xml  # capture groups
 
     def test_literal_template_no_child_decoder(self):

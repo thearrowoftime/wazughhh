@@ -160,7 +160,7 @@ def generate_wazuh_xml(cluster: LogCluster, decoder_name: str | None = None) -> 
         lines.append(f"  <parent>{name}</parent>")
         if prematch and "<*>" not in prematch:
             lines.append(f'  <prematch offset="after_parent">{prematch}</prematch>')
-        lines.append(f"  <regex>{regex}</regex>")
+        lines.append(f'  <regex type="pcre2">{regex}</regex>')
         lines.append(f"  <order>{', '.join(order)}</order>")
         lines.append("</decoder>")
 

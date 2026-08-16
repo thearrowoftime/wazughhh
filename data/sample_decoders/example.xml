@@ -1,0 +1,10 @@
+<!-- Sample decoder from Wazuh docs — used by the Logtest tab and CLI. -->
+<decoder name="example">
+  <program_name>^example</program_name>
+</decoder>
+
+<decoder name="example">
+  <parent>example</parent>
+  <regex>User '(\w+)' logged from '(\d+.\d+.\d+.\d+)'</regex>
+  <order>user, srcip</order>
+</decoder>

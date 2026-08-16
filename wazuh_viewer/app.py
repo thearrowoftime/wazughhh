@@ -54,6 +54,7 @@ from wazuh_viewer.decoder_generator import (
     _template_to_pcre2_and_order,
 )
 from wazuh_viewer.logtest_runner import run_logtest_ssh
+from wazuh_viewer.local_logtest import DecoderXMLError, format_many, run_logtest
 from wazuh_viewer.ssh_deployer import (
     check_connection,
     deploy_decoder_xml,
@@ -523,7 +524,10 @@ class DecoderLabTab(TabPane):
             with VerticalScroll(id="lab-right"):
                 yield Static("[b]Pre-decoder output[/b]")
                 yield Static("", id="lab-predecoder-info")
-                yield Static("[b]wazuh-logtest result (SSH)[/b]")
+                yield Static("[b]Local logtest (no SSH)[/b]")
+                yield Button("Test XML + sample locally", id="lab-local-logtest", variant="primary")
+                yield Button("Test XML + all samples locally", id="lab-local-logtest-all", variant="default")
+                yield Static("[b]wazuh-logtest (SSH)[/b]")
                 yield Button("Run logtest (sample)", id="lab-run-logtest", variant="warning")
                 yield Button("Run logtest (full cluster)", id="lab-run-logtest-all", variant="default")
                 yield Button("Check deployed decoders", id="lab-logtest-check", variant="default")
@@ -675,7 +679,56 @@ class DecoderLabTab(TabPane):
         self.app.call_from_thread(self.query_one("#lab-ssh-status", Static).update, msg)
 
     # ------------------------------------------------------------------
-    # wazuh-logtest runners
+    # Local logtest (no SSH)
+    # ------------------------------------------------------------------
+
+    def _lab_xml_and_logs(self, all_samples: bool) -> tuple[str, list[str]] | None:
+        xml_text = self.query_one("#lab-gen-xml", TextArea).text.strip()
+        if not xml_text:
+            self.app.set_status("No decoder XML — select a cluster or paste XML first")
+            return None
+        if not self._selected_cluster:
+            self.app.set_status("Select a cluster from the table")
+            return None
+        if all_samples:
+            logs = [s.raw for s in self._selected_cluster.samples[:50]]
+        else:
+            rep = self._selected_cluster.representative()
+            if not rep:
+                self.app.set_status("Cluster has no samples")
+                return None
+            logs = [rep.raw]
+        return xml_text, logs
+
+    @on(Button.Pressed, "#lab-local-logtest")
+    def _local_logtest_sample(self) -> None:
+        payload = self._lab_xml_and_logs(all_samples=False)
+        if payload:
+            self._show_local_logtest(*payload)
+
+    @on(Button.Pressed, "#lab-local-logtest-all")
+    def _local_logtest_all(self) -> None:
+        payload = self._lab_xml_and_logs(all_samples=True)
+        if payload:
+            self._show_local_logtest(*payload)
+
+    def _show_local_logtest(self, xml_text: str, logs: list[str]) -> None:
+        try:
+            results = run_logtest(logs, xml_text=xml_text)
+        except DecoderXMLError as exc:
+            self.query_one("#lab-logtest-out", TextArea).load_text(f"ERROR: {exc}")
+            self.query_one("#lab-logtest-summary", Static).update("[red]Invalid decoder XML[/red]")
+            return
+        out = format_many(results, debug=True)
+        matched = sum(1 for r in results if r.matched)
+        self.query_one("#lab-logtest-out", TextArea).load_text(out)
+        color = "green" if matched == len(results) else "yellow" if matched else "red"
+        self.query_one("#lab-logtest-summary", Static).update(
+            f"[{color}]local logtest:[/] {matched}/{len(results)} decoder matched"
+        )
+
+    # ------------------------------------------------------------------
+    # wazuh-logtest runners (SSH)
     # ------------------------------------------------------------------
 
     @on(Button.Pressed, "#lab-run-logtest")
@@ -915,12 +968,139 @@ class DecoderLabTab(TabPane):
 
 
 # ============================================================================
+# Local Logtest Tab
+# ============================================================================
+
+_LT_SAMPLE_LOG = (
+    "Jan  1 00:00:00 host example[123]: User 'admin' logged from '192.168.1.1'"
+)
+
+_LT_SAMPLE_XML = """\
+<decoder name="example">
+  <program_name>^example</program_name>
+</decoder>
+
+<decoder name="example">
+  <parent>example</parent>
+  <regex>User '(\\w+)' logged from '(\\d+.\\d+.\\d+.\\d+)'</regex>
+  <order>user, srcip</order>
+</decoder>
+"""
+
+
+class LogtestTab(TabPane):
+    """Paste a log + decoder XML and see wazuh-logtest Phase 1/2 locally."""
+
+    DEFAULT_CSS = """
+    LogtestTab { height: 1fr; }
+    LogtestTab #lt-help { padding: 0 1; height: 2; }
+    LogtestTab #lt-toolbar {
+        height: 3;
+        padding: 0 1;
+    }
+    LogtestTab #lt-toolbar Input { width: 1fr; }
+    LogtestTab #lt-toolbar Button { margin-left: 1; }
+    LogtestTab #lt-status { padding: 0 1; height: 1; }
+    LogtestTab #lt-mid { height: 1fr; }
+    LogtestTab #lt-log-col, LogtestTab #lt-xml-col {
+        width: 1fr;
+        border: solid $accent;
+        padding: 1;
+    }
+    LogtestTab #lt-log, LogtestTab #lt-xml { height: 1fr; }
+    LogtestTab #lt-out-wrap {
+        height: 1fr;
+        border: solid $primary;
+        padding: 1;
+    }
+    LogtestTab #lt-out { height: 1fr; }
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__("Logtest", id="tab-logtest", **kwargs)
+
+    def compose(self) -> ComposeResult:
+        yield Static(
+            "[b]Local wazuh-logtest[/b]  — wklej log i XML dekodera. Bez SSH, bez menedżera.",
+            id="lt-help",
+        )
+        with Horizontal(id="lt-toolbar"):
+            yield Input(placeholder="ścieżka do decoder.xml albo folderu z *.xml", id="lt-path")
+            yield Button("Wczytaj XML", id="lt-load")
+            yield Button("Testuj log", id="lt-run", variant="primary")
+        yield Static("Gotowy przykład w edytorze — kliknij Testuj log", id="lt-status")
+        with Horizontal(id="lt-mid"):
+            with Vertical(id="lt-log-col"):
+                yield Label("Log (jedna linia = jedno zdarzenie)")
+                yield TextArea(_LT_SAMPLE_LOG, id="lt-log")
+            with Vertical(id="lt-xml-col"):
+                yield Label("Decoder XML")
+                yield TextArea(_LT_SAMPLE_XML, id="lt-xml", language="xml")
+        with Vertical(id="lt-out-wrap"):
+            yield Label("Wynik (Phase 1 pre-decoding + Phase 2 decoding)")
+            yield TextArea("", id="lt-out", read_only=True)
+
+    @on(Button.Pressed, "#lt-load")
+    def _load_xml(self) -> None:
+        path_str = self.query_one("#lt-path", Input).value.strip()
+        if not path_str:
+            self.query_one("#lt-status", Static).update("[red]Podaj ścieżkę do pliku lub folderu XML[/red]")
+            return
+        p = Path(path_str)
+        if not p.exists():
+            self.query_one("#lt-status", Static).update(f"[red]Nie znaleziono: {p}[/red]")
+            return
+        try:
+            if p.is_dir():
+                chunks = []
+                files = sorted(p.glob("*.xml"))
+                if not files:
+                    self.query_one("#lt-status", Static).update(f"[red]Brak plików .xml w {p}[/red]")
+                    return
+                for xml_file in files:
+                    chunks.append(f"<!-- {xml_file.name} -->\n{xml_file.read_text(encoding='utf-8', errors='replace')}")
+                text = "\n\n".join(chunks)
+                self.query_one("#lt-status", Static).update(
+                    f"[green]Wczytano {len(files)} plików XML z {p.name}[/green]"
+                )
+            else:
+                text = p.read_text(encoding="utf-8", errors="replace")
+                self.query_one("#lt-status", Static).update(f"[green]Wczytano {p.name}[/green]")
+            self.query_one("#lt-xml", TextArea).load_text(text)
+        except OSError as exc:
+            self.query_one("#lt-status", Static).update(f"[red]{exc}[/red]")
+
+    @on(Button.Pressed, "#lt-run")
+    def _run(self) -> None:
+        xml_text = self.query_one("#lt-xml", TextArea).text
+        log_text = self.query_one("#lt-log", TextArea).text
+        logs = [ln for ln in log_text.splitlines() if ln.strip()]
+        if not logs:
+            self.query_one("#lt-status", Static).update("[red]Wklej przynajmniej jedną linię logu[/red]")
+            return
+        try:
+            results = run_logtest(logs, xml_text=xml_text)
+        except DecoderXMLError as exc:
+            self.query_one("#lt-out", TextArea).load_text(f"ERROR: {exc}")
+            self.query_one("#lt-status", Static).update("[red]Niepoprawny XML dekodera[/red]")
+            return
+        out = format_many(results, debug=True)
+        matched = sum(1 for r in results if r.matched)
+        self.query_one("#lt-out", TextArea).load_text(out)
+        color = "green" if matched == len(results) else "yellow" if matched else "red"
+        self.query_one("#lt-status", Static).update(
+            f"[{color}]{matched}/{len(results)} logów z dopasowanym dekoderem[/]"
+        )
+        self.app.set_status(f"Local logtest: {matched}/{len(results)} matched")
+
+
+# ============================================================================
 # Main App
 # ============================================================================
 
 class WazuhAlertViewer(App):
     TITLE = "Wazuh Alert Viewer"
-    SUB_TITLE = "Alert Triage & Decoder Lab"
+    SUB_TITLE = "Alert Triage, Decoder Lab & Local Logtest"
 
     CSS = """
     Screen { layout: vertical; }
@@ -943,6 +1123,7 @@ class WazuhAlertViewer(App):
         Binding("q", "quit", "Quit"),
         Binding("1", "switch_tab('tab-alerts')", "Alerts"),
         Binding("2", "switch_tab('tab-lab')", "Decoder Lab"),
+        Binding("3", "switch_tab('tab-logtest')", "Logtest"),
         Binding("r", "reload", "Reload"),
         Binding("s", "save_triage", "Save triage"),
         Binding("/", "focus_search", "Search"),
@@ -954,6 +1135,7 @@ class WazuhAlertViewer(App):
         alerts_path: Path,
         triage_path: Path,
         ssh_cfg: WazuhSSHConfig | None = None,
+        start_tab: str = "tab-alerts",
     ) -> None:
         super().__init__()
         self._alerts_path = alerts_path
@@ -961,14 +1143,20 @@ class WazuhAlertViewer(App):
         self._ssh_cfg = ssh_cfg or WazuhSSHConfig()
         self._generated_dir = alerts_path.parent / "generated"
         self._reports_dir = alerts_path.parent / "reports"
+        self._start_tab = start_tab
 
     def compose(self) -> ComposeResult:
         yield Header()
         with TabbedContent():
             yield AlertsTab(self._alerts_path, self._triage_store, self._reports_dir)
             yield DecoderLabTab(self._ssh_cfg, self._generated_dir)
+            yield LogtestTab()
         yield Static("Ready", id="status-bar")
         yield Footer()
+
+    def on_mount(self) -> None:
+        if self._start_tab:
+            self.query_one(TabbedContent).active = self._start_tab
 
     def set_status(self, msg: str) -> None:
         self.query_one("#status-bar", Static).update(msg)

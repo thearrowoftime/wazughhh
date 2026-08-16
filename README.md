@@ -1,7 +1,9 @@
 # wazughhh — Wazuh Alert Viewer
 
+
 - **Alert Triage** — filter, deduplicate, inspect and annotate Wazuh alerts; export shift handover reports (Markdown + CSV)
-- **Decoder Lab** — import raw rsyslog/syslog files, auto-cluster similar log lines with [Drain3](https://github.com/logpai/Drain3), generate Wazuh XML decoders and liblognorm rulebases, validate against a live Wazuh Manager over SSH, and **batch-deploy all decoders with one click**
+- **Decoder Lab** — import raw rsyslog/syslog files, auto-cluster similar log lines with [Drain3](https://github.com/logpai/Drain3), generate Wazuh XML decoders and liblognorm rulebases, **test them locally**, validate against a live Wazuh Manager over SSH, and **batch-deploy all decoders with one click**
+- **Logtest** — paste a log line and decoder XML, see wazuh-logtest Phase 1/2 **without a Wazuh manager** (Windows-friendly)
 
 ---
 
@@ -9,7 +11,7 @@
 
 ```
 ┌─ Wazuh Alert Viewer ──────────────────────────────────────────────────────────────┐
-│ [1] Alerts  [2] Decoder Lab                                                        │
+│ [1] Alerts  [2] Decoder Lab  [3] Logtest                                           │
 ├────────────────┬──────────────────────────────────────────┬────────────────────────┤
 │ Filters        │ Count  First seen   Last seen  Lvl  Host │ Group: 5710 @ web-01   │
 │ Severity ▼     │   47   2026-07-10   2026-07-10  5  web-01│ HIGH (max level 12)    │
@@ -25,7 +27,7 @@
 │ [Markdown rpt] │                                           │                        │
 │ [CSV export  ] │                                           │                        │
 └────────────────┴──────────────────────────────────────────┴────────────────────────┘
-│ q Quit  1 Alerts  2 Decoder Lab  r Reload  s Save  / Search                        │
+│ q Quit  1 Alerts  2 Decoder Lab  3 Logtest  r Reload  s Save  / Search              │
 └────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -59,6 +61,7 @@
 | liblognorm generator | Produces rsyslog `mmnormalize` rulebase with typed field placeholders |
 | Smart field naming | Infers `srcip`, `dstip`, `srcport`, `user`, `action`, `pid`, `url`, `mac` from context |
 | Local coverage | Tests generated regex against all cluster samples — shows `matched/total (%)` |
+| **Local logtest** | Runs the XML from the editor against the sample (or whole cluster) using a built-in decoder engine — no SSH |
 | wazuh-logtest via SSH | Sends samples to `/var/ossec/bin/wazuh-logtest` on Wazuh Manager, parses Phase 1/2/3 output |
 | Single export | Save XML or `.rb` rulebase for the selected cluster to `data/generated/` |
 | **Single SSH deploy** | SCP the selected cluster's XML to `/var/ossec/etc/decoders/` on the Wazuh Manager |
@@ -66,6 +69,18 @@
 | **rsyslog .conf generator** | Generate a complete `rsyslog.conf` snippet with `mmnormalize` action blocks + Wazuh JSON forward — one block per program, ready to drop into `/etc/rsyslog.d/` |
 | **Deploy ALL + reload** | Batch SCP all XMLs → run `wazuh-logtest --check` → only reload if syntax is clean → `wazuh-control reload` |
 | Syntax validation | Runs `wazuh-logtest --check` on the remote host and shows the output before any reload |
+
+### Logtest tab (`3`)
+
+Paste a raw log and decoder XML. The local engine does syslog pre-decoding (Phase 1) and decoder matching (Phase 2) the same way `wazuh-logtest` does — OS_Regex, OS_Match, PCRE2, parent/child, `offset`, `JSON_Decoder`. Rules (Phase 3) are not evaluated locally.
+
+| Feature | Details |
+|---------|---------|
+| Paste log | One event per line |
+| Paste / load XML | Editor, file, or folder of `*.xml` |
+| Isolated test | Only the XML you loaded is tested — so you know *this* decoder works, not some other ruleset decoder |
+| Debug | Shows why other parent decoders missed (`program_name` / `prematch` / `regex`) |
+| CLI | `python logtest.py -d decoder.xml -l "the log line"` |
 
 ---
 
@@ -96,8 +111,11 @@ python main.py \
   --wazuh-user root \
   --identity-file ~/.ssh/id_rsa
 
-# Full options
-python main.py --help
+# Open directly on the local Logtest tab
+python main.py --tab logtest
+
+# CLI logtest (no TUI) — decoder XML vs one or more log lines
+python logtest.py -d data/sample_decoders/example.xml -l "Jan  1 00:00:00 host example[123]: User 'admin' logged from '192.168.1.1'"
 ```
 
 ---
@@ -128,8 +146,8 @@ python main.py --help
 1. Enter a log file path and click **Load file**
 2. Click a cluster row — inspect Wazuh XML, liblognorm rulebase, predecoder fields, local coverage
 3. Edit directly in the TextArea if needed
-4. Click **Run logtest (sample)** to test one representative line against the live Wazuh Manager
-5. Click **Run logtest (full cluster)** to send up to 50 samples and see match rate
+4. Click **Test XML + sample locally** — Phase 1/2 output without SSH
+5. Click **Run logtest (sample)** only if you want to confirm against a live Wazuh Manager
 6. Click **Deploy XML via SSH** to push only the selected decoder
 
 ---
@@ -140,6 +158,7 @@ python main.py --help
 |-----|--------|
 | `1` | Switch to Alerts tab |
 | `2` | Switch to Decoder Lab tab |
+| `3` | Switch to Logtest tab |
 | `r` | Reload alerts + triage state |
 | `s` | Save triage (analyst + notes + status) |
 | `/` | Focus search box |
@@ -191,14 +210,16 @@ The CSV (`reports/alerts_YYYYMMDD_HHMMSS.csv`) contains one row per alert with a
 ```
 wazughhh/
 ├── main.py                        # CLI entry point
+├── logtest.py                     # Local wazuh-logtest CLI (no TUI, no manager)
 ├── requirements.txt
 ├── data/
 │   ├── sample_alerts.json         # 10 sample Wazuh alerts
+│   ├── sample_decoders/           # example decoder XML for local logtest
 │   ├── sample_logs/               # rsyslog samples (sshd, FortiGate, Cisco IOS, auth, Windows)
 │   ├── generated/                 # exported decoders — review here before deploying (git-ignored)
 │   └── reports/                   # shift reports — Markdown + CSV (git-ignored)
 └── wazuh_viewer/
-    ├── app.py                     # Textual TUI — AlertsTab + DecoderLabTab
+    ├── app.py                     # Textual TUI — AlertsTab + DecoderLabTab + LogtestTab
     ├── models.py                  # Alert, AlertGroup, TriageStatus, SeverityBand, FilterState
     ├── parser.py                  # Alert JSON/JSONL parser
     ├── filters.py                 # Alert filtering + group_alerts() deduplication
@@ -209,6 +230,9 @@ wazughhh/
     ├── log_importer.py            # Multi-format log file importer
     ├── clusterer.py               # Drain3-based log clustering
     ├── decoder_generator.py       # Wazuh XML + liblognorm generator + local coverage
+    ├── decoder_xml.py             # Parse Wazuh decoder XML + parent/child tree
+    ├── osregex.py                 # OS_Regex / OS_Match → Python
+    ├── local_logtest.py           # Local wazuh-logtest engine (Phase 1–2)
     ├── logtest_runner.py          # SSH wazuh-logtest runner + output parser
     ├── ssh_deployer.py            # SCP deploy + wazuh-logtest --check + wazuh-control reload
     └── rsyslog_generator.py       # rsyslog mmnormalize conf + liblognorm/XML bundle generators
@@ -222,7 +246,7 @@ wazughhh/
 python -m pytest tests/ -v
 ```
 
-**61 tests** covering: predecoder, importer, clusterer, XML/liblognorm generator, local coverage, logtest output parser, alert deduplication/grouping, shift report (Markdown + CSV), rsyslog config and bundle generators.
+**85+ tests** covering: predecoder, importer, clusterer, XML/liblognorm generator, local coverage, local decoder engine (OS_Regex / PCRE2 / JSON), logtest output parser, alert deduplication/grouping, shift report (Markdown + CSV), rsyslog config and bundle generators.
 
 ---
 
@@ -253,7 +277,6 @@ No passwords are stored. `BatchMode=yes` ensures the tool never hangs waiting fo
 - **Quick-triage hotkeys** — `i` = Investigating, `f` = False Positive, `e` = Escalate, no mouse needed
 - **Watch mode** — monitor a live log file and re-cluster when new lines arrive
 - **Wazuh API authentication** — token-based, stored in OS keychain (not plain text)
-- **Logtest sandbox** — paste any raw log line, send to wazuh-logtest, see all three phases inline
 - **Jump to decoder/rule file** — given `decoder.name` from logtest, open the matching XML
 - **Decoder conflict checker** — detect when two decoders share `program_name` + overlapping `prematch`
 

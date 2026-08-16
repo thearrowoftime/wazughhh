@@ -66,6 +66,12 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help="Ścieżka do wazuh-logtest na zdalnym hoście",
     )
+    parser.add_argument(
+        "--tab",
+        choices=["alerts", "lab", "logtest"],
+        default="alerts",
+        help="Zakładka startowa: alerts | lab | logtest (lokalny test dekodera)",
+    )
     return parser
 
 
@@ -82,10 +88,12 @@ def main() -> None:
         logtest_path=args.logtest_path,
     )
 
+    tab_ids = {"alerts": "tab-alerts", "lab": "tab-lab", "logtest": "tab-logtest"}
     app = WazuhAlertViewer(
         alerts_path=args.alerts,
         triage_path=args.triage,
         ssh_cfg=ssh_cfg,
+        start_tab=tab_ids[args.tab],
     )
     app.run()
 
