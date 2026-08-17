@@ -39,38 +39,38 @@ def build_parser() -> argparse.ArgumentParser:
         "--wazuh-host",
         default="",
         metavar="HOST",
-        help="Adres IP/DNS Wazuh Managera (dla wazuh-logtest przez SSH)",
+        help="Wazuh Manager IP/DNS (for wazuh-logtest over SSH)",
     )
     parser.add_argument(
         "--wazuh-user",
         default="root",
         metavar="USER",
-        help="Użytkownik SSH (domyślnie: root)",
+        help="SSH user (default: root)",
     )
     parser.add_argument(
         "--wazuh-port",
         type=int,
         default=22,
         metavar="PORT",
-        help="Port SSH (domyślnie: 22)",
+        help="SSH port (default: 22)",
     )
     parser.add_argument(
         "--identity-file",
         default="",
         metavar="KEY",
-        help="Klucz prywatny SSH (np. ~/.ssh/id_rsa)",
+        help="SSH private key (e.g. ~/.ssh/id_rsa)",
     )
     parser.add_argument(
         "--logtest-path",
         default="/var/ossec/bin/wazuh-logtest",
         metavar="PATH",
-        help="Ścieżka do wazuh-logtest na zdalnym hoście",
+        help="Path to wazuh-logtest on the remote host",
     )
     parser.add_argument(
         "--tab",
         choices=["alerts", "lab", "logtest"],
         default="alerts",
-        help="Zakładka startowa: alerts | lab | logtest (lokalny test dekodera)",
+        help="Starting tab: alerts | lab | logtest (local decoder test)",
     )
     return parser
 

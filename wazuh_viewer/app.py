@@ -1021,51 +1021,51 @@ class LogtestTab(TabPane):
 
     def compose(self) -> ComposeResult:
         yield Static(
-            "[b]Local wazuh-logtest[/b]  — wklej log i XML dekodera. Bez SSH, bez menedżera.",
+            "[b]Local wazuh-logtest[/b]  — paste a log and decoder XML. No SSH, no manager.",
             id="lt-help",
         )
         with Horizontal(id="lt-toolbar"):
-            yield Input(placeholder="ścieżka do decoder.xml albo folderu z *.xml", id="lt-path")
-            yield Button("Wczytaj XML", id="lt-load")
-            yield Button("Testuj log", id="lt-run", variant="primary")
-        yield Static("Gotowy przykład w edytorze — kliknij Testuj log", id="lt-status")
+            yield Input(placeholder="path to decoder.xml or a folder of *.xml", id="lt-path")
+            yield Button("Load XML", id="lt-load")
+            yield Button("Test log", id="lt-run", variant="primary")
+        yield Static("Sample loaded in the editors — click Test log", id="lt-status")
         with Horizontal(id="lt-mid"):
             with Vertical(id="lt-log-col"):
-                yield Label("Log (jedna linia = jedno zdarzenie)")
+                yield Label("Log (one line = one event)")
                 yield TextArea(_LT_SAMPLE_LOG, id="lt-log")
             with Vertical(id="lt-xml-col"):
                 yield Label("Decoder XML")
                 yield TextArea(_LT_SAMPLE_XML, id="lt-xml", language="xml")
         with Vertical(id="lt-out-wrap"):
-            yield Label("Wynik (Phase 1 pre-decoding + Phase 2 decoding)")
+            yield Label("Result (Phase 1 pre-decoding + Phase 2 decoding)")
             yield TextArea("", id="lt-out", read_only=True)
 
     @on(Button.Pressed, "#lt-load")
     def _load_xml(self) -> None:
         path_str = self.query_one("#lt-path", Input).value.strip()
         if not path_str:
-            self.query_one("#lt-status", Static).update("[red]Podaj ścieżkę do pliku lub folderu XML[/red]")
+            self.query_one("#lt-status", Static).update("[red]Enter a path to an XML file or folder[/red]")
             return
         p = Path(path_str)
         if not p.exists():
-            self.query_one("#lt-status", Static).update(f"[red]Nie znaleziono: {p}[/red]")
+            self.query_one("#lt-status", Static).update(f"[red]Not found: {p}[/red]")
             return
         try:
             if p.is_dir():
                 chunks = []
                 files = sorted(p.glob("*.xml"))
                 if not files:
-                    self.query_one("#lt-status", Static).update(f"[red]Brak plików .xml w {p}[/red]")
+                    self.query_one("#lt-status", Static).update(f"[red]No .xml files in {p}[/red]")
                     return
                 for xml_file in files:
                     chunks.append(f"<!-- {xml_file.name} -->\n{xml_file.read_text(encoding='utf-8', errors='replace')}")
                 text = "\n\n".join(chunks)
                 self.query_one("#lt-status", Static).update(
-                    f"[green]Wczytano {len(files)} plików XML z {p.name}[/green]"
+                    f"[green]Loaded {len(files)} XML files from {p.name}[/green]"
                 )
             else:
                 text = p.read_text(encoding="utf-8", errors="replace")
-                self.query_one("#lt-status", Static).update(f"[green]Wczytano {p.name}[/green]")
+                self.query_one("#lt-status", Static).update(f"[green]Loaded {p.name}[/green]")
             self.query_one("#lt-xml", TextArea).load_text(text)
         except OSError as exc:
             self.query_one("#lt-status", Static).update(f"[red]{exc}[/red]")
@@ -1076,20 +1076,20 @@ class LogtestTab(TabPane):
         log_text = self.query_one("#lt-log", TextArea).text
         logs = [ln for ln in log_text.splitlines() if ln.strip()]
         if not logs:
-            self.query_one("#lt-status", Static).update("[red]Wklej przynajmniej jedną linię logu[/red]")
+            self.query_one("#lt-status", Static).update("[red]Paste at least one log line[/red]")
             return
         try:
             results = run_logtest(logs, xml_text=xml_text)
         except DecoderXMLError as exc:
             self.query_one("#lt-out", TextArea).load_text(f"ERROR: {exc}")
-            self.query_one("#lt-status", Static).update("[red]Niepoprawny XML dekodera[/red]")
+            self.query_one("#lt-status", Static).update("[red]Invalid decoder XML[/red]")
             return
         out = format_many(results, debug=True)
         matched = sum(1 for r in results if r.matched)
         self.query_one("#lt-out", TextArea).load_text(out)
         color = "green" if matched == len(results) else "yellow" if matched else "red"
         self.query_one("#lt-status", Static).update(
-            f"[{color}]{matched}/{len(results)} logów z dopasowanym dekoderem[/]"
+            f"[{color}]{matched}/{len(results)} logs with a matching decoder[/]"
         )
         self.app.set_status(f"Local logtest: {matched}/{len(results)} matched")
 

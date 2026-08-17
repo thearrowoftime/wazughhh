@@ -78,7 +78,7 @@ def load_alerts_from_file(path: Path) -> list[Alert]:
                 alerts.append(alert)
         return alerts
 
-    raise ValueError(f"Nieobsługiwany format pliku: {path}")
+    raise ValueError(f"Unsupported file format: {path}")
 
 
 def load_alerts_from_iterable(items: Iterable[dict[str, Any]]) -> list[Alert]:
